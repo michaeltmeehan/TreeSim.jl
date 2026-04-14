@@ -132,14 +132,17 @@ function branch_length(tree::Tree, i::Int)
     return tree.time[i] - tree.time[p]
 end
 
-function validate_tree(tree::Tree)
+function validate_tree(tree::Tree; require_single_root::Bool=false, require_reachable::Bool=false)
     n = length(tree.time)
     _validate_lengths(tree, n)
     _validate_indices(tree, n)
+    roots = _root_nodes(tree)
+    _validate_roots(tree, roots; require_single_root)
     _validate_parent_child_consistency(tree)
     _validate_degrees(tree)
     _validate_time_ordering(tree)
     _validate_acyclic(tree)
+    require_reachable && _validate_reachable(tree, roots)
     return true
 end
 
@@ -177,6 +180,28 @@ function _validate_parent_child_consistency(tree::Tree)
     return nothing
 end
 
+_root_nodes(tree::Tree) = [i for i in eachindex(tree) if tree.parent[i] == 0]
+
+function _validate_roots(tree::Tree, roots::Vector{Int}; require_single_root::Bool)
+    if !isempty(tree) && isempty(roots)
+        error("Tree must have at least one root node.")
+    end
+
+    if require_single_root && length(roots) != 1
+        error("Tree must have exactly one root node; found $(length(roots)).")
+    end
+
+    for i in eachindex(tree)
+        if tree.parent[i] == 0
+            tree.kind[i] == Root || error("Node $i has no parent but kind $(tree.kind[i]); root nodes must have kind Root.")
+        elseif tree.kind[i] == Root
+            error("Node $i has kind Root but parent $(tree.parent[i]); root nodes are identified by parent == 0.")
+        end
+    end
+
+    return nothing
+end
+
 function _validate_degrees(tree::Tree)
     for i in eachindex(tree)
         k = tree.kind[i]
@@ -199,6 +224,20 @@ function _validate_degrees(tree::Tree)
             error("Unknown NodeKind at node $i.")
         end
     end
+    return nothing
+end
+
+function _validate_reachable(tree::Tree, roots::Vector{Int})
+    seen = Set{Int}()
+    stack = reverse(roots)
+    while !isempty(stack)
+        current = pop!(stack)
+        current in seen && continue
+        push!(seen, current)
+        append!(stack, reverse(children(tree, current)))
+    end
+
+    length(seen) == length(tree) || error("Tree contains nodes that are not reachable from root nodes.")
     return nothing
 end
 
