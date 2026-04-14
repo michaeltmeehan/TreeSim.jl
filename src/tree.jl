@@ -1,5 +1,16 @@
 import Base: parent
 
+"""
+    NodeKind
+
+Structural role of a node in the canonical `Tree` representation.
+
+- `Root`: the unique node with `parent == 0`; it must have at least one child.
+- `Binary`: an internal non-root node with exactly two children.
+- `UnsampledUnary`: an unsampled internal non-root node with exactly one child.
+- `SampledUnary`: a sampled internal non-root node with exactly one child.
+- `SampledLeaf`: a sampled non-root tip with no children.
+"""
 @enum NodeKind::UInt8 begin
     Root = 0
     Binary = 1
@@ -8,6 +19,22 @@ import Base: parent
     SampledLeaf = 4
 end
 
+"""
+    Tree
+
+Canonical time-ordered tree storage.
+
+Nodes are identified by their vector index. The integer value `0` is the only
+null reference and denotes the absence of a parent or child. Every non-zero
+entry in `left`, `right`, and `parent` must point to another node index in the
+same `Tree`.
+
+Canonical trees are ordered by nondecreasing node time in storage, and every
+edge must point from an earlier index to a later index with strictly increasing
+time. A tree that passes `validate_tree` has one root, is reachable from that
+root, has reciprocal parent/child pointers, and has node degrees compatible
+with `kind`.
+"""
 struct Tree
     time::Vector{Float64}
     left::Vector{Int}
@@ -18,6 +45,12 @@ struct Tree
     label::Vector{Int}
 end
 
+"""
+    Node
+
+Immutable row view returned by `tree[i]`. The `id` field is the node's index in
+the backing `Tree`; other fields mirror the corresponding vector entries.
+"""
 struct Node
     id::Int
     time::Float64
@@ -132,12 +165,25 @@ function branch_length(tree::Tree, i::Int)
     return tree.time[i] - tree.time[p]
 end
 
-function validate_tree(tree::Tree; require_single_root::Bool=false, require_reachable::Bool=false)
+"""
+    validate_tree(tree::Tree; require_single_root::Bool=true, require_reachable::Bool=true)
+
+Validate the canonical structural contract for `Tree`.
+
+By default, validation is intentionally strict: non-empty trees must have
+exactly one root and all nodes must be reachable from it. Storage order is also
+part of the contract: `time` must be nondecreasing by node index, while each
+parent-child edge must advance to a greater index and a strictly later time.
+Set `require_single_root=false` or `require_reachable=false` only when
+inspecting provisional, non-canonical structures.
+"""
+function validate_tree(tree::Tree; require_single_root::Bool=true, require_reachable::Bool=true)
     n = length(tree.time)
     _validate_lengths(tree, n)
     _validate_indices(tree, n)
     roots = _root_nodes(tree)
     _validate_roots(tree, roots; require_single_root)
+    _validate_unique_children(tree)
     _validate_parent_child_consistency(tree)
     _validate_degrees(tree)
     _validate_time_ordering(tree)
@@ -177,10 +223,39 @@ function _validate_parent_child_consistency(tree::Tree)
         l != 0 && tree.parent[l] != i && error("Parent-child mismatch: node $i left child $l has parent $(tree.parent[l]).")
         r != 0 && tree.parent[r] != i && error("Parent-child mismatch: node $i right child $r has parent $(tree.parent[r]).")
     end
+
+    for i in eachindex(tree)
+        p = tree.parent[i]
+        if p != 0 && tree.left[p] != i && tree.right[p] != i
+            error("Parent-child mismatch: node $i names parent $p, but parent $p does not list node $i as a child.")
+        end
+    end
+
     return nothing
 end
 
 _root_nodes(tree::Tree) = [i for i in eachindex(tree) if tree.parent[i] == 0]
+
+function _validate_unique_children(tree::Tree)
+    child_parent = Dict{Int, Int}()
+
+    for i in eachindex(tree)
+        l = tree.left[i]
+        r = tree.right[i]
+
+        l != 0 && r != 0 && l == r && error("Node $i cannot list child $l in both left and right.")
+
+        for child in (l, r)
+            child == 0 && continue
+            if haskey(child_parent, child)
+                error("Node $child is listed as a child of both node $(child_parent[child]) and node $i.")
+            end
+            child_parent[child] = i
+        end
+    end
+
+    return nothing
+end
 
 function _validate_roots(tree::Tree, roots::Vector{Int}; require_single_root::Bool)
     if !isempty(tree) && isempty(roots)
@@ -242,8 +317,13 @@ function _validate_reachable(tree::Tree, roots::Vector{Int})
 end
 
 function _validate_time_ordering(tree::Tree)
+    for i in 2:length(tree)
+        tree.time[i - 1] <= tree.time[i] || error("Tree nodes must be stored in nondecreasing time order; node $(i - 1) has time $(tree.time[i - 1]) and node $i has time $(tree.time[i]).")
+    end
+
     for i in eachindex(tree)
         for child in children(tree, i)
+            i < child || error("Parent index must be less than child index for canonical time-ordered storage; edge $i -> $child violates this.")
             tree.time[i] < tree.time[child] || error("Parent time must be less than child time for edge $i -> $child.")
         end
     end
