@@ -37,6 +37,38 @@ function two_cherry_tree()
     )
 end
 
+function nonzero_child_slots(tree)
+    count = 0
+    for i in eachindex(tree)
+        count += tree.left[i] != 0
+        count += tree.right[i] != 0
+    end
+    return count
+end
+
+function test_edge_segments_match_node_positions(tree)
+    parents, child_nodes = parent_child_pairs(tree)
+    x, y = node_positions(tree)
+    x1, y1, x2, y2 = edge_segments(tree)
+
+    @test length(parents) == length(child_nodes)
+    @test length(x1) == length(parents)
+    @test length(y1) == length(parents)
+    @test length(x2) == length(parents)
+    @test length(y2) == length(parents)
+
+    for k in eachindex(parents)
+        @test x1[k] == x[parents[k]]
+        @test y1[k] == y[parents[k]]
+        @test x2[k] == x[child_nodes[k]]
+        @test y2[k] == y[child_nodes[k]]
+    end
+end
+
+function svg_string(plot)
+    return sprint(show, MIME("image/svg+xml"), plot)
+end
+
 @testset "TreeSim canonical core" begin
     @testset "valid canonical binary tree" begin
         tree = canonical_binary_tree()
@@ -73,6 +105,28 @@ end
         @test tree_height(tree) ≈ 1.3
         @test mean_root_to_tip_distance(tree) ≈ sum(root_to_tip_distances(tree)) / nleaves(tree)
         @test ncherries(tree) == 1
+
+        tip_y = tip_positions(tree)
+        x, y = node_positions(tree)
+        @test length(tip_y) == nnodes(tree)
+        @test isnan(tip_y[1])
+        @test isnan(tip_y[2])
+        @test tip_y[tips(tree)] ≈ [1.0, 2.0, 3.0]
+        @test x == node_depths(tree)
+        @test y[tips(tree)] ≈ tip_y[tips(tree)]
+        @test y[2] ≈ (y[4] + y[5]) / 2
+        @test y[1] ≈ (y[2] + y[3]) / 2
+
+        parents, child_nodes = parent_child_pairs(tree)
+        @test parents == [1, 1, 2, 2]
+        @test child_nodes == [2, 3, 4, 5]
+        @test length(parents) == nonzero_child_slots(tree)
+        x1, y1, x2, y2 = edge_segments(tree)
+        @test x1 ≈ [0.0, 0.0, 0.4, 0.4]
+        @test y1 ≈ [2.25, 2.25, 1.5, 1.5]
+        @test x2 ≈ [0.4, 0.8, 1.1, 1.3]
+        @test y2 ≈ [1.5, 3.0, 1.0, 2.0]
+        test_edge_segments_match_node_positions(tree)
     end
 
     @testset "valid canonical unary tree" begin
@@ -102,6 +156,25 @@ end
         @test tree_height(tree) ≈ 1.5
         @test mean_root_to_tip_distance(tree) ≈ 1.5
         @test ncherries(tree) == 0
+
+        tip_y = tip_positions(tree)
+        x, y = node_positions(tree)
+        @test all(isnan, tip_y[1:3])
+        @test tip_y[4] == 1.0
+        @test x == node_depths(tree)
+        @test y[4] == 1.0
+        @test y[1] == y[2] == y[3] == y[4]
+
+        parents, child_nodes = parent_child_pairs(tree)
+        @test parents == [1, 2, 3]
+        @test child_nodes == [2, 3, 4]
+        @test length(parents) == nonzero_child_slots(tree)
+        x1, y1, x2, y2 = edge_segments(tree)
+        @test x1 ≈ [0.0, 0.4, 0.9]
+        @test y1 ≈ [1.0, 1.0, 1.0]
+        @test x2 ≈ [0.4, 0.9, 1.5]
+        @test y2 ≈ [1.0, 1.0, 1.0]
+        test_edge_segments_match_node_positions(tree)
     end
 
     @testset "depth-oriented summaries" begin
@@ -116,6 +189,21 @@ end
         @test tree_height(tree) ≈ maximum(root_to_tip_distances(tree))
         @test mean_root_to_tip_distance(tree) ≈ 0.95
         @test ncherries(tree) == 2
+
+        tip_y = tip_positions(tree)
+        x, y = node_positions(tree)
+        @test tip_y[tips(tree)] ≈ [1.0, 2.0, 3.0, 4.0]
+        @test all(isnan, tip_y[internal_nodes(tree)])
+        @test x == node_depths(tree)
+        @test y[2] ≈ 1.5
+        @test y[3] ≈ 3.5
+        @test y[1] ≈ 2.5
+
+        parents, child_nodes = parent_child_pairs(tree)
+        @test parents == [1, 1, 2, 2, 3, 3]
+        @test child_nodes == [2, 3, 4, 5, 6, 7]
+        @test length(parents) == nonzero_child_slots(tree)
+        test_edge_segments_match_node_positions(tree)
     end
 
     @testset "traversal iterators" begin
@@ -134,6 +222,45 @@ end
         @test collect(breadthfirst(unary)) == [1, 2, 3, 4]
     end
 
+    @testset "minimal plotting" begin
+        binary = canonical_binary_tree()
+        unary = canonical_unary_tree()
+
+        empty_plot = plot_tree(Tree())
+        binary_plot = plot_tree(binary)
+        unary_plot = plot_tree(unary; node_color=collect(1:nnodes(unary)))
+        sized_plot = plot_tree(binary; width=640, height=360, edge_color="black")
+
+        @test occursin("<svg", svg_string(empty_plot))
+        @test occursin("<svg", svg_string(binary_plot))
+        @test occursin("<line", svg_string(binary_plot))
+        @test occursin("<circle", svg_string(binary_plot))
+        @test occursin("#d95f02", svg_string(binary_plot))
+        @test occursin("#1b9e77", svg_string(binary_plot))
+        @test occursin("<svg", svg_string(unary_plot))
+        @test occursin("width=\"640\"", svg_string(sized_plot))
+        @test occursin("height=\"360\"", svg_string(sized_plot))
+        @test occursin("stroke=\"black\"", svg_string(sized_plot))
+
+        categorical_plot = plot_tree(binary; node_color=binary.kind)
+        @test occursin("<circle", svg_string(categorical_plot))
+
+        labeled_plot = plot_tree(binary; labels=collect(eachindex(binary)))
+        string_labeled_plot = plot_tree(binary; labels=["n$i" for i in eachindex(binary)])
+        @test occursin(">1<", svg_string(labeled_plot))
+        @test occursin("n1", svg_string(string_labeled_plot))
+
+        @test_throws ArgumentError plot_tree(binary; width=0)
+        @test_throws ArgumentError plot_tree(binary; height=-1)
+        @test_throws ArgumentError plot_tree(binary; node_color=[1, 2])
+        @test_throws ArgumentError plot_tree(binary; node_color=[1, 2, missing, 4, 5])
+        @test_throws ArgumentError plot_tree(binary; node_color=Any[1, 2, nothing, 4, 5])
+        @test_throws ArgumentError plot_tree(binary; labels=["too", "short"])
+        @test_throws ArgumentError plot_tree(binary; labels=Any["n1", "n2", missing, "n4", "n5"])
+        @test_throws ArgumentError plot_tree(binary; labels=Any["n1", "n2", nothing, "n4", "n5"])
+        @test_throws ArgumentError plot_tree(binary; edge_color=missing)
+    end
+
     @testset "root discovery handles provisional root counts" begin
         empty = Tree()
         @test roots(empty) == Int[]
@@ -150,6 +277,18 @@ end
         @test tree_height(empty) == 0.0
         @test mean_root_to_tip_distance(empty) == 0.0
         @test ncherries(empty) == 0
+        @test tip_positions(empty) == Float64[]
+        x_empty, y_empty = node_positions(empty)
+        @test x_empty == Float64[]
+        @test y_empty == Float64[]
+        parents_empty, children_empty = parent_child_pairs(empty)
+        @test parents_empty == Int[]
+        @test children_empty == Int[]
+        x1_empty, y1_empty, x2_empty, y2_empty = edge_segments(empty)
+        @test x1_empty == Float64[]
+        @test y1_empty == Float64[]
+        @test x2_empty == Float64[]
+        @test y2_empty == Float64[]
 
         multi_root_tree = Tree(
             [0.0, 0.1, 0.5, 0.8],
@@ -180,20 +319,70 @@ end
         @test tree_height(multi_root_tree) ≈ 0.7
         @test mean_root_to_tip_distance(multi_root_tree) ≈ 0.6
         @test ncherries(multi_root_tree) == 0
+
+        tip_y = tip_positions(multi_root_tree)
+        x, y = node_positions(multi_root_tree)
+        @test all(isnan, tip_y[1:2])
+        @test tip_y[3:4] == [1.0, 2.0]
+        @test tip_y[tips(multi_root_tree)] ≈ [1.0, 2.0]
+        @test x == node_depths(multi_root_tree)
+        @test y == [1.0, 2.0, 1.0, 2.0]
+
+        parents, child_nodes = parent_child_pairs(multi_root_tree)
+        @test parents == [1, 2]
+        @test child_nodes == [3, 4]
+        @test length(parents) == nonzero_child_slots(multi_root_tree)
+        x1, y1, x2, y2 = edge_segments(multi_root_tree)
+        @test x1 ≈ [0.0, 0.0]
+        @test y1 ≈ [1.0, 2.0]
+        @test x2 ≈ [0.5, 0.7]
+        @test y2 ≈ [1.0, 2.0]
+        test_edge_segments_match_node_positions(multi_root_tree)
+
+        multi_root_plot = plot_tree(multi_root_tree; node_color=multi_root_tree.kind)
+        @test occursin("<svg", svg_string(multi_root_plot))
     end
 
     @testset "node row view and branch length" begin
         tree = canonical_binary_tree()
-        node = tree[4]
+        root_node = tree[1]
+        internal_node = tree[2]
+        tip_node = tree[4]
 
-        @test node isa Node
-        @test node.id == 4
-        @test node.time == 1.1
-        @test node.parent == 2
-        @test node.kind == SampledLeaf
+        @test tip_node isa Node
+        @test tip_node.id == 4
+        @test tip_node.time == 1.1
+        @test tip_node.parent == 2
+        @test tip_node.kind == SampledLeaf
         @test branch_length(tree, 2) == 0.4
         @test branch_length(tree, 4) ≈ 0.7
         @test_throws ErrorException branch_length(tree, 1)
+
+        tree_display = sprint(show, tree)
+        @test startswith(tree_display, "Tree(")
+        @test occursin("5 nodes", tree_display)
+        @test occursin("1 root", tree_display)
+        @test occursin("2 internal", tree_display)
+        @test occursin("3 tips", tree_display)
+
+        root_display = sprint(show, root_node)
+        @test occursin("Node(1, Root", root_display)
+        @test occursin("time=0.0", root_display)
+        @test occursin("children=[2, 3]", root_display)
+        @test !occursin("parent=0", root_display)
+
+        internal_display = sprint(show, internal_node)
+        @test occursin("Node(2, Binary", internal_display)
+        @test occursin("parent=1", internal_display)
+        @test occursin("children=[4, 5]", internal_display)
+
+        tip_display = sprint(show, tip_node)
+        @test occursin("Node(4, SampledLeaf", tip_display)
+        @test occursin("time=1.1", tip_display)
+        @test occursin("parent=2", tip_display)
+        @test !occursin("left=0", tip_display)
+        @test !occursin("right=0", tip_display)
+        @test !occursin("children=", tip_display)
     end
 
     @testset "canonical validation requires one reachable root by default" begin
