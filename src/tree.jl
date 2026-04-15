@@ -89,6 +89,9 @@ function Base.show(io::IO, node::Node)
     node.right != 0 && push!(children, node.right)
     !isempty(children) && print(io, ", children=", children)
 
+    node.host != 0 && print(io, ", host=", node.host)
+    node.label != 0 && print(io, ", label=", node.label)
+
     print(io, ")")
 end
 
@@ -115,8 +118,14 @@ Construct an empty `Tree`.
 Tree() = Tree(Float64[], Int[], Int[], Int[], NodeKind[], Int[], Int[])
 
 Base.length(tree::Tree) = length(tree.time)
+Base.isempty(tree::Tree) = isempty(tree.time)
 Base.size(tree::Tree) = (length(tree),)
 Base.eachindex(tree::Tree) = eachindex(tree.time)
+Base.firstindex(::Tree) = 1
+Base.lastindex(tree::Tree) = length(tree)
+Base.eltype(::Type{Tree}) = Node
+Base.IteratorSize(::Type{Tree}) = Base.HasLength()
+Base.IteratorEltype(::Type{Tree}) = Base.HasEltype()
 
 """
     tree[i]

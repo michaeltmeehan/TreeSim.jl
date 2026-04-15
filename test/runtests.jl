@@ -440,6 +440,34 @@ end
         @test collect(breadthfirst(unary)) == [1, 2, 3, 4]
     end
 
+    @testset "tree collection interface" begin
+        tree = canonical_binary_tree()
+        empty = Tree()
+
+        @test !isempty(tree)
+        @test isempty(empty)
+        @test firstindex(tree) == 1
+        @test lastindex(tree) == nnodes(tree)
+        @test firstindex(empty) == 1
+        @test lastindex(empty) == 0
+        @test eltype(Tree) == Node
+        @test Base.IteratorSize(Tree) == Base.HasLength()
+        @test Base.IteratorEltype(Tree) == Base.HasEltype()
+
+        @test tree[end] == tree[nnodes(tree)]
+        @test first(tree) == tree[1]
+        @test last(tree) == tree[end]
+
+        nodes = collect(tree)
+        @test nodes isa Vector{Node}
+        @test [node.id for node in nodes] == collect(eachindex(tree))
+        @test nodes == [tree[i] for i in eachindex(tree)]
+
+        @test_throws BoundsError tree[0]
+        @test_throws BoundsError tree[nnodes(tree) + 1]
+        @test_throws BoundsError empty[end]
+    end
+
     @testset "minimal plotting" begin
         binary = canonical_binary_tree()
         unary = canonical_unary_tree()
@@ -598,9 +626,16 @@ end
         @test occursin("Node(4, SampledLeaf", tip_display)
         @test occursin("time=1.1", tip_display)
         @test occursin("parent=2", tip_display)
+        @test occursin("label=102", tip_display)
         @test !occursin("left=0", tip_display)
         @test !occursin("right=0", tip_display)
         @test !occursin("children=", tip_display)
+        @test !occursin("host=0", tip_display)
+
+        metadata_node = Node(10, 2.5, 0, 0, 4, SampledLeaf, 7, 9001)
+        metadata_display = sprint(show, metadata_node)
+        @test occursin("host=7", metadata_display)
+        @test occursin("label=9001", metadata_display)
     end
 
     @testset "canonical validation requires one reachable root by default" begin
