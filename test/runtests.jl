@@ -25,11 +25,25 @@ function canonical_unary_tree()
     )
 end
 
+function two_cherry_tree()
+    return Tree(
+        [0.0, 0.3, 0.4, 0.8, 0.9, 1.0, 1.1],
+        [2, 4, 6, 0, 0, 0, 0],
+        [3, 5, 7, 0, 0, 0, 0],
+        [0, 1, 1, 2, 2, 3, 3],
+        [Root, Binary, Binary, SampledLeaf, SampledLeaf, SampledLeaf, SampledLeaf],
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 401, 402, 403, 404],
+    )
+end
+
 @testset "TreeSim canonical core" begin
     @testset "valid canonical binary tree" begin
         tree = canonical_binary_tree()
 
         @test validate_tree(tree)
+        @test roots(tree) == [1]
+        @test root(tree) == 1
         @test children(tree, 1) == [2, 3]
         @test children(tree, 2) == [4, 5]
         @test parent(tree, 4) == 2
@@ -37,23 +51,135 @@ end
         @test isbinary(tree, 2)
         @test !isunary(tree, 2)
         @test isleaf(tree, 3)
+        @test isleaf(tree, 4)
+        @test !isleaf(tree, 1)
+        @test !isleaf(tree, 2)
         @test isinternal(tree, 1)
         @test leaves(tree) == [3, 4, 5]
+        @test tips(tree) == [4, 5, 3]
+        @test length(tips(tree)) == nleaves(tree)
+        @test internal_nodes(tree) == [1, 2]
+        @test nnodes(tree) == 5
+        @test nleaves(tree) == 3
+        @test ninternal(tree) == 2
         @test ancestors(tree, 5) == [2, 1]
         @test descendants(tree, 1) == [2, 4, 5, 3]
         @test descendants(tree, 2) == [4, 5]
+        @test subtree_nodes(tree, 3) == [3]
+        @test subtree_nodes(tree, 2) == [2, 4, 5]
+        @test subtree_nodes(tree, 1) == [1, 2, 4, 5, 3]
+        @test node_depths(tree) ≈ [0.0, 0.4, 0.8, 1.1, 1.3]
+        @test root_to_tip_distances(tree) ≈ [1.1, 1.3, 0.8]
+        @test tree_height(tree) ≈ 1.3
+        @test mean_root_to_tip_distance(tree) ≈ sum(root_to_tip_distances(tree)) / nleaves(tree)
+        @test ncherries(tree) == 1
     end
 
     @testset "valid canonical unary tree" begin
         tree = canonical_unary_tree()
 
         @test validate_tree(tree)
+        @test root(tree) == 1
         @test isunary(tree, 1)
         @test isunary(tree, 2)
         @test isunary(tree, 3)
+        @test !isleaf(tree, 1)
+        @test isleaf(tree, 4)
         @test leaves(tree) == [4]
+        @test tips(tree) == [4]
+        @test length(tips(tree)) == nleaves(tree)
+        @test internal_nodes(tree) == [1, 2, 3]
+        @test nnodes(tree) == 4
+        @test nleaves(tree) == 1
+        @test ninternal(tree) == 3
         @test ancestors(tree, 4) == [3, 2, 1]
         @test descendants(tree, 1) == [2, 3, 4]
+        @test subtree_nodes(tree, 4) == [4]
+        @test subtree_nodes(tree, 2) == [2, 3, 4]
+        @test subtree_nodes(tree, 1) == [1, 2, 3, 4]
+        @test node_depths(tree) ≈ [0.0, 0.4, 0.9, 1.5]
+        @test root_to_tip_distances(tree) ≈ [1.5]
+        @test tree_height(tree) ≈ 1.5
+        @test mean_root_to_tip_distance(tree) ≈ 1.5
+        @test ncherries(tree) == 0
+    end
+
+    @testset "depth-oriented summaries" begin
+        tree = two_cherry_tree()
+
+        @test validate_tree(tree)
+        @test tips(tree) == [4, 5, 6, 7]
+        @test node_depths(tree) ≈ [0.0, 0.3, 0.4, 0.8, 0.9, 1.0, 1.1]
+        @test length(node_depths(tree)) == nnodes(tree)
+        @test node_depths(tree)[tips(tree)] ≈ root_to_tip_distances(tree)
+        @test root_to_tip_distances(tree) ≈ [0.8, 0.9, 1.0, 1.1]
+        @test tree_height(tree) ≈ maximum(root_to_tip_distances(tree))
+        @test mean_root_to_tip_distance(tree) ≈ 0.95
+        @test ncherries(tree) == 2
+    end
+
+    @testset "traversal iterators" begin
+        tree = canonical_binary_tree()
+
+        @test collect(preorder(tree)) == [1, 2, 4, 5, 3]
+        @test collect(preorder(tree, 2)) == [2, 4, 5]
+        @test collect(postorder(tree)) == [4, 5, 2, 3, 1]
+        @test collect(postorder(tree, 2)) == [4, 5, 2]
+        @test collect(breadthfirst(tree)) == [1, 2, 3, 4, 5]
+        @test collect(breadthfirst(tree, 2)) == [2, 4, 5]
+
+        unary = canonical_unary_tree()
+        @test collect(preorder(unary)) == [1, 2, 3, 4]
+        @test collect(postorder(unary)) == [4, 3, 2, 1]
+        @test collect(breadthfirst(unary)) == [1, 2, 3, 4]
+    end
+
+    @testset "root discovery handles provisional root counts" begin
+        empty = Tree()
+        @test roots(empty) == Int[]
+        @test_throws ErrorException root(empty)
+        @test collect(preorder(empty)) == Int[]
+        @test collect(postorder(empty)) == Int[]
+        @test collect(breadthfirst(empty)) == Int[]
+        @test tips(empty) == Int[]
+        @test nnodes(empty) == 0
+        @test nleaves(empty) == 0
+        @test ninternal(empty) == 0
+        @test node_depths(empty) == Float64[]
+        @test root_to_tip_distances(empty) == Float64[]
+        @test tree_height(empty) == 0.0
+        @test mean_root_to_tip_distance(empty) == 0.0
+        @test ncherries(empty) == 0
+
+        multi_root_tree = Tree(
+            [0.0, 0.1, 0.5, 0.8],
+            [3, 4, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 1, 2],
+            [Root, Root, SampledLeaf, SampledLeaf],
+            [0, 0, 0, 0],
+            [0, 0, 201, 202],
+        )
+
+        @test roots(multi_root_tree) == [1, 2]
+        @test_throws ErrorException root(multi_root_tree)
+        @test collect(preorder(multi_root_tree)) == [1, 3, 2, 4]
+        @test collect(postorder(multi_root_tree)) == [3, 1, 4, 2]
+        @test collect(breadthfirst(multi_root_tree)) == [1, 2, 3, 4]
+        @test tips(multi_root_tree) == [3, 4]
+        @test length(tips(multi_root_tree)) == nleaves(multi_root_tree)
+        @test collect(preorder(multi_root_tree, 2)) == [2, 4]
+        @test collect(postorder(multi_root_tree, 2)) == [4, 2]
+        @test collect(breadthfirst(multi_root_tree, 2)) == [2, 4]
+        @test subtree_nodes(multi_root_tree, 3) == [3]
+        @test subtree_nodes(multi_root_tree, 1) == [1, 3]
+        @test subtree_nodes(multi_root_tree, 2) == [2, 4]
+        @test node_depths(multi_root_tree) ≈ [0.0, 0.0, 0.5, 0.7]
+        @test node_depths(multi_root_tree)[tips(multi_root_tree)] ≈ root_to_tip_distances(multi_root_tree)
+        @test root_to_tip_distances(multi_root_tree) ≈ [0.5, 0.7]
+        @test tree_height(multi_root_tree) ≈ 0.7
+        @test mean_root_to_tip_distance(multi_root_tree) ≈ 0.6
+        @test ncherries(multi_root_tree) == 0
     end
 
     @testset "node row view and branch length" begin

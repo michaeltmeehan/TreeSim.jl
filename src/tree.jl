@@ -62,6 +62,21 @@ struct Node
     label::Int
 end
 
+struct PreorderIterator
+    tree::Tree
+    starts::Vector{Int}
+end
+
+struct PostorderIterator
+    tree::Tree
+    starts::Vector{Int}
+end
+
+struct BreadthFirstIterator
+    tree::Tree
+    starts::Vector{Int}
+end
+
 Tree() = Tree(Float64[], Int[], Int[], Int[], NodeKind[], Int[], Int[])
 
 Base.length(tree::Tree) = length(tree.time)
@@ -100,6 +115,28 @@ function children(tree::Tree, i::Int)
     return out
 end
 
+"""
+    roots(tree::Tree)
+
+Return node ids with no parent. Canonical validated trees contain exactly one
+root, but provisional structures may contain zero or multiple roots.
+"""
+function roots(tree::Tree)
+    return [i for i in eachindex(tree) if tree.parent[i] == 0]
+end
+
+"""
+    root(tree::Tree)
+
+Return the unique root node id. Throws if the tree does not have exactly one
+root.
+"""
+function root(tree::Tree)
+    rs = roots(tree)
+    length(rs) == 1 || error("Tree must have exactly one root; found $(length(rs)).")
+    return only(rs)
+end
+
 function parent(tree::Tree, i::Int)
     _check_node(tree, i)
     return tree.parent[i]
@@ -126,6 +163,163 @@ function leaves(tree::Tree)
     return [i for i in eachindex(tree) if isleaf(tree, i)]
 end
 
+"""
+    tips(tree::Tree)
+
+Return tip node ids in preorder tip encounter order. Empty trees return
+`Int[]`; multi-root structures are traversed in `roots(tree)` order.
+"""
+function tips(tree::Tree)
+    out = Int[]
+    for i in preorder(tree)
+        isleaf(tree, i) && push!(out, i)
+    end
+    return out
+end
+
+function internal_nodes(tree::Tree)
+    return [i for i in eachindex(tree) if isinternal(tree, i)]
+end
+
+"""
+    nnodes(tree::Tree)
+
+Return the number of nodes stored in `tree`.
+"""
+nnodes(tree::Tree) = length(tree)
+
+"""
+    nleaves(tree::Tree)
+
+Return the number of leaf nodes, defined structurally as nodes with no left or
+right child.
+"""
+function nleaves(tree::Tree)
+    count = 0
+    for i in eachindex(tree)
+        count += (tree.left[i] == 0 && tree.right[i] == 0)
+    end
+    return count
+end
+
+"""
+    ninternal(tree::Tree)
+
+Return the number of internal nodes, defined structurally as nodes with at
+least one child. Roots with children count as internal nodes.
+"""
+function ninternal(tree::Tree)
+    count = 0
+    for i in eachindex(tree)
+        count += (tree.left[i] != 0 || tree.right[i] != 0)
+    end
+    return count
+end
+
+"""
+    preorder(tree::Tree[, start])
+
+Iterate over node ids in depth-first preorder from `start`, visiting the left
+child before the right child. If `start` is omitted, traversal starts from all
+roots in `roots(tree)` order. Empty trees yield no nodes.
+"""
+preorder(tree::Tree) = PreorderIterator(tree, roots(tree))
+
+function preorder(tree::Tree, start::Int)
+    _check_node(tree, start)
+    return PreorderIterator(tree, [start])
+end
+
+"""
+    postorder(tree::Tree[, start])
+
+Iterate over node ids in depth-first postorder from `start`, visiting children
+before their parent. Left children are visited before right children. If
+`start` is omitted, traversal starts from all roots in `roots(tree)` order.
+Empty trees yield no nodes.
+"""
+postorder(tree::Tree) = PostorderIterator(tree, roots(tree))
+
+function postorder(tree::Tree, start::Int)
+    _check_node(tree, start)
+    return PostorderIterator(tree, [start])
+end
+
+"""
+    breadthfirst(tree::Tree[, start])
+
+Iterate over node ids level by level from `start`, visiting the left child
+before the right child. If `start` is omitted, traversal starts from all roots
+in `roots(tree)` order. Empty trees yield no nodes.
+"""
+breadthfirst(tree::Tree) = BreadthFirstIterator(tree, roots(tree))
+
+function breadthfirst(tree::Tree, start::Int)
+    _check_node(tree, start)
+    return BreadthFirstIterator(tree, [start])
+end
+
+Base.IteratorSize(::Type{PreorderIterator}) = Base.SizeUnknown()
+Base.IteratorSize(::Type{PostorderIterator}) = Base.SizeUnknown()
+Base.IteratorSize(::Type{BreadthFirstIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{PreorderIterator}) = Int
+Base.eltype(::Type{PostorderIterator}) = Int
+Base.eltype(::Type{BreadthFirstIterator}) = Int
+
+function Base.iterate(iter::PreorderIterator)
+    stack = reverse(copy(iter.starts))
+    return iterate(iter, stack)
+end
+
+function Base.iterate(iter::PreorderIterator, stack::Vector{Int})
+    isempty(stack) && return nothing
+    current = pop!(stack)
+    right = iter.tree.right[current]
+    left = iter.tree.left[current]
+    right != 0 && push!(stack, right)
+    left != 0 && push!(stack, left)
+    return (current, stack)
+end
+
+function Base.iterate(iter::PostorderIterator)
+    stack = Tuple{Int, Bool}[]
+    for start in reverse(iter.starts)
+        push!(stack, (start, false))
+    end
+    return iterate(iter, stack)
+end
+
+function Base.iterate(iter::PostorderIterator, stack::Vector{Tuple{Int, Bool}})
+    while !isempty(stack)
+        current, expanded = pop!(stack)
+        if expanded
+            return (current, stack)
+        end
+
+        push!(stack, (current, true))
+        right = iter.tree.right[current]
+        left = iter.tree.left[current]
+        right != 0 && push!(stack, (right, false))
+        left != 0 && push!(stack, (left, false))
+    end
+    return nothing
+end
+
+function Base.iterate(iter::BreadthFirstIterator)
+    return iterate(iter, (copy(iter.starts), 1))
+end
+
+function Base.iterate(iter::BreadthFirstIterator, state::Tuple{Vector{Int}, Int})
+    queue, offset = state
+    offset > length(queue) && return nothing
+    current = queue[offset]
+    left = iter.tree.left[current]
+    right = iter.tree.right[current]
+    left != 0 && push!(queue, left)
+    right != 0 && push!(queue, right)
+    return (current, (queue, offset + 1))
+end
+
 function ancestors(tree::Tree, i::Int)
     _check_node(tree, i)
     out = Int[]
@@ -143,18 +337,101 @@ end
 
 function descendants(tree::Tree, i::Int)
     _check_node(tree, i)
-    out = Int[]
-    stack = reverse(children(tree, i))
-    seen = Set{Int}()
-    while !isempty(stack)
-        current = pop!(stack)
-        _check_node(tree, current)
-        current in seen && error("Cycle detected below node $i.")
-        push!(seen, current)
-        push!(out, current)
-        append!(stack, reverse(children(tree, current)))
+    out = collect(preorder(tree, i))
+    return out[2:end]
+end
+
+"""
+    subtree_nodes(tree::Tree, i::Int)
+
+Return all node ids in the subtree rooted at `i`, ordered by preorder and
+including `i` itself.
+"""
+function subtree_nodes(tree::Tree, i::Int)
+    return collect(preorder(tree, i))
+end
+
+"""
+    node_depths(tree::Tree)
+
+Return a node-index-aligned vector of metric depths. `depths[i]` is the stored
+branch-length distance from node `i`'s own root to node `i`. Empty trees return
+`Float64[]`; multi-root structures are measured within each rooted component.
+"""
+function node_depths(tree::Tree)
+    depths = zeros(Float64, length(tree))
+
+    for i in preorder(tree)
+        p = tree.parent[i]
+        depths[i] = p == 0 ? 0.0 : depths[p] + tree.time[i] - tree.time[p]
     end
+
+    return depths
+end
+
+"""
+    root_to_tip_distances(tree::Tree)
+
+Return root-to-tip distances for tips only, ordered by tip encounter in
+preorder traversal. In multi-root structures, each distance is measured from
+the tip's own root. Empty trees return `Float64[]`.
+"""
+function root_to_tip_distances(tree::Tree)
+    depths = zeros(Float64, length(tree))
+    out = Float64[]
+
+    for i in preorder(tree)
+        p = tree.parent[i]
+        depths[i] = p == 0 ? 0.0 : depths[p] + tree.time[i] - tree.time[p]
+        if tree.left[i] == 0 && tree.right[i] == 0
+            push!(out, depths[i])
+        end
+    end
+
     return out
+end
+
+"""
+    tree_height(tree::Tree)
+
+Return the maximum root-to-tip distance. Empty trees have height `0.0`. For
+multi-root structures, the height is the maximum across rooted components.
+"""
+function tree_height(tree::Tree)
+    height = 0.0
+    for distance in root_to_tip_distances(tree)
+        height = max(height, distance)
+    end
+    return height
+end
+
+"""
+    mean_root_to_tip_distance(tree::Tree)
+
+Return the mean root-to-tip distance across all tips in preorder tip encounter
+order. Empty trees return `0.0`; multi-root structures include tips from all
+rooted components.
+"""
+function mean_root_to_tip_distance(tree::Tree)
+    distances = root_to_tip_distances(tree)
+    isempty(distances) && return 0.0
+    return sum(distances) / length(distances)
+end
+
+"""
+    ncherries(tree::Tree)
+
+Return the number of cherries. A cherry is an internal node whose left and right
+children are both tips; unary nodes do not count as cherries.
+"""
+function ncherries(tree::Tree)
+    count = 0
+    for i in eachindex(tree)
+        l = tree.left[i]
+        r = tree.right[i]
+        count += (l != 0 && r != 0 && isleaf(tree, l) && isleaf(tree, r))
+    end
+    return count
 end
 
 function branch_length(tree::Tree, i::Int)
