@@ -1,5 +1,6 @@
 using Test
 using TreeSim
+using EpiSim
 
 function canonical_binary_tree()
     return Tree(
@@ -11,6 +12,223 @@ function canonical_binary_tree()
         [0, 0, 0, 0, 0],
         [0, 0, 101, 102, 103],
     )
+end
+
+@testset "EpiSim EventLog adaptor" begin
+    @testset "serial samples on sibling transmissions produce sampled tree" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0, 3.0, 4.0],
+            [1, 2, 3, 2, 3],
+            [0, 1, 1, 0, 0],
+            [EK_Seeding, EK_Transmission, EK_Transmission, EK_SerialSampling, EK_SerialSampling],
+        )
+
+        tree = tree_from_eventlog(log)
+
+        @test validate_tree(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test nnodes(tree) == 5
+        @test tree.time == [0.0, 1.0, 2.0, 3.0, 4.0]
+        @test tree.kind == [Root, Binary, UnsampledUnary, SampledLeaf, SampledLeaf]
+        @test tree.host == [1, 1, 1, 2, 3]
+        @test children(tree, 1) == [2]
+        @test children(tree, 2) == [3, 4]
+        @test children(tree, 3) == [5]
+        @test sort(tree.label[tips(tree)]) == [2, 3]
+
+        forest = forest_from_eventlog(log)
+        @test length(forest) == 1
+        @test forest[1].time == tree.time
+        @test forest[1].host == tree.host
+    end
+
+    @testset "fossilized sampling becomes unary when sampled descendants remain" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0, 3.0],
+            [1, 2, 2, 2],
+            [0, 1, 0, 0],
+            [EK_Seeding, EK_Transmission, EK_FossilizedSampling, EK_SerialSampling],
+        )
+
+        tree = tree_from_eventlog(log)
+
+        @test validate_tree(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test tree.kind == [Root, UnsampledUnary, SampledUnary, SampledLeaf]
+        @test tree.host == [1, 1, 2, 2]
+        @test tree.label == [0, 0, 0, 2]
+        @test ancestors(tree, 4) == [3, 2, 1]
+    end
+
+    @testset "unsampled side lineages are pruned" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0, 3.0],
+            [1, 2, 3, 2],
+            [0, 1, 1, 0],
+            [EK_Seeding, EK_Transmission, EK_Transmission, EK_SerialSampling],
+        )
+
+        tree = tree_from_eventlog(log)
+
+        @test validate_tree(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test tree.kind == [Root, UnsampledUnary, SampledLeaf]
+        @test tree.host == [1, 1, 2]
+        @test all(!=(3), tree.host)
+    end
+
+    @testset "logs without samples produce an empty tree" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0],
+            [1, 2, 2],
+            [0, 1, 0],
+            [EK_Seeding, EK_Transmission, EK_Removal],
+        )
+
+        tree = tree_from_eventlog(log)
+
+        @test isempty(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test forest_from_eventlog(log) == Tree[]
+    end
+
+    @testset "bridge validation catches event-node mismatches" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0],
+            [1, 2, 2],
+            [0, 1, 0],
+            [EK_Seeding, EK_Transmission, EK_SerialSampling],
+        )
+        tree = tree_from_eventlog(log)
+        shifted = Tree(
+            copy(tree.time),
+            copy(tree.left),
+            copy(tree.right),
+            copy(tree.parent),
+            copy(tree.kind),
+            [1, 1, 99],
+            copy(tree.label),
+        )
+
+        @test_throws ErrorException validate_tree_against_eventlog(log, shifted)
+    end
+
+    @testset "multiple retained seeded components are rejected" begin
+        log = EventLog(
+            [0.0, 0.0, 1.0, 1.5],
+            [1, 2, 1, 2],
+            [0, 0, 0, 0],
+            [EK_Seeding, EK_Seeding, EK_SerialSampling, EK_SerialSampling],
+        )
+
+        err = try
+            tree_from_eventlog(log)
+            nothing
+        catch e
+            e
+        end
+
+        @test err isa ErrorException
+        @test occursin("strict single-tree API", sprint(showerror, err))
+
+        forest = forest_from_eventlog(log)
+        @test length(forest) == 2
+        @test all(validate_tree, forest)
+        @test validate_tree_against_eventlog(log, forest)
+        @test [tree.host[root(tree)] for tree in forest] == [1, 2]
+        @test [only(tree.label[tips(tree)]) for tree in forest] == [1, 2]
+    end
+
+    @testset "forest components are deterministically ordered by root time and host" begin
+        log = EventLog(
+            [0.0, 0.0, 1.0, 1.5],
+            [5, 2, 5, 2],
+            [0, 0, 0, 0],
+            [EK_Seeding, EK_Seeding, EK_SerialSampling, EK_SerialSampling],
+        )
+
+        forest = forest_from_eventlog(log)
+
+        @test length(forest) == 2
+        @test [tree.time[root(tree)] for tree in forest] == [0.0, 0.0]
+        @test [tree.host[root(tree)] for tree in forest] == [2, 5]
+        @test [only(tree.label[tips(tree)]) for tree in forest] == [2, 5]
+    end
+
+    @testset "forest validation counts events globally" begin
+        log = EventLog(
+            [0.0, 0.0, 1.0, 1.5],
+            [1, 2, 1, 2],
+            [0, 0, 0, 0],
+            [EK_Seeding, EK_Seeding, EK_SerialSampling, EK_SerialSampling],
+        )
+        forest = forest_from_eventlog(log)
+        duplicated = [forest[1], forest[1]]
+
+        err = try
+            validate_tree_against_eventlog(log, duplicated)
+            nothing
+        catch e
+            e
+        end
+
+        @test err isa ErrorException
+        @test occursin("does not correspond to Seeding event", sprint(showerror, err))
+    end
+
+    @testset "equal-time retained ancestry is rejected clearly" begin
+        log = EventLog(
+            [0.0, 0.0, 1.0],
+            [1, 2, 2],
+            [0, 1, 0],
+            [EK_Seeding, EK_Transmission, EK_SerialSampling],
+        )
+
+        err = try
+            tree_from_eventlog(log)
+            nothing
+        catch e
+            e
+        end
+
+        @test err isa ErrorException
+        @test occursin("Retained ancestry times must be strictly increasing", sprint(showerror, err))
+    end
+
+    @testset "duplicate retained sampling signatures are rejected" begin
+        log = EventLog(
+            [0.0, 1.0, 1.0],
+            [1, 1, 1],
+            [0, 0, 0],
+            [EK_Seeding, EK_FossilizedSampling, EK_FossilizedSampling],
+        )
+
+        err = try
+            tree_from_eventlog(log)
+            nothing
+        catch e
+            e
+        end
+
+        @test err isa ErrorException
+        @test occursin("Ambiguous duplicate retained sampling event signature", sprint(showerror, err))
+    end
+
+    @testset "sparse positive host ids are accepted" begin
+        log = EventLog(
+            [0.0, 2.0],
+            [100, 100],
+            [0, 0],
+            [EK_Seeding, EK_SerialSampling],
+        )
+
+        tree = tree_from_eventlog(log)
+
+        @test validate_tree(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test tree.host == [100, 100]
+        @test tree.label == [0, 100]
+    end
 end
 
 function canonical_unary_tree()

@@ -2,9 +2,15 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "5514d874b4d86d58f5a5ed13e80cc16306423b96"
+project_hash = "13e1784caab4a398725c74dde37e4459112cfdb5"
 
 [[deps.TreeSim]]
 path = "."
 uuid = "dc327cbd-6c9b-4100-9a5f-ed0bbf0cf4d5"
 version = "0.1.0"
+
+    [deps.TreeSim.extensions]
+    EpiSimExt = "EpiSim"
+
+    [deps.TreeSim.weakdeps]
+    EpiSim = "baf66cd8-34c1-424a-92fd-19e59a9b7bce"

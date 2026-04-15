@@ -3,8 +3,18 @@ uuid = "dc327cbd-6c9b-4100-9a5f-ed0bbf0cf4d5"
 authors = ["michaeltmeehan <michael.meehan1@jcu.edu.au>"]
 version = "0.1.0"
 
+[sources]
+EpiSim = {path = "../EpiSim.jl"}
+
 [extras]
+EpiSim = "baf66cd8-34c1-424a-92fd-19e59a9b7bce"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+[weakdeps]
+EpiSim = "baf66cd8-34c1-424a-92fd-19e59a9b7bce"
+
+[extensions]
+EpiSimExt = "EpiSim"
+
 [targets]
-test = ["Test"]
+test = ["Test", "EpiSim"]

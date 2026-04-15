@@ -227,6 +227,54 @@ edge_segments(tree)       # (x1, y1, x2, y2)
 `[4, 5, 3]` receive positions `[1.0, 2.0, 3.0]`. Internal node positions are the
 mean of their child positions.
 
+## Extract Sampled Ancestry From EpiSim
+
+TreeSim keeps epidemic simulators optional. When `EpiSim` is loaded alongside
+`TreeSim`, a package extension provides a narrow sampled-ancestry bridge from
+`EpiSim.EventLog` to TreeSim trees.
+
+Use `tree_from_eventlog` when the retained sampled ancestry is known to have at
+most one seeded component. It returns `Tree()` when there are no retained
+samples, returns the only retained component when there is one, and errors if
+multiple retained sampled components are present.
+
+```julia
+using TreeSim
+using EpiSim
+
+log = EventLog(
+    [0.0, 1.0, 2.0],
+    [1, 2, 2],
+    [0, 1, 0],
+    [EK_Seeding, EK_Transmission, EK_SerialSampling],
+)
+
+tree = tree_from_eventlog(log)
+validate_tree_against_eventlog(log, tree)
+```
+
+Use `forest_from_eventlog` when an event log may contain multiple independently
+seeded sampled components. It returns one standalone canonical `Tree` per
+retained component, ordered by root time, then root host id, then original root
+index.
+
+```julia
+log = EventLog(
+    [0.0, 0.0, 1.0, 1.5],
+    [1, 2, 1, 2],
+    [0, 0, 0, 0],
+    [EK_Seeding, EK_Seeding, EK_SerialSampling, EK_SerialSampling],
+)
+
+forest = forest_from_eventlog(log)
+validate_tree_against_eventlog(log, forest)
+```
+
+This bridge extracts sampled transmission ancestry, not the complete outbreak
+history. Unsampled side lineages without sampled descendants are pruned. If
+retained ancestry would require an equal-time or backward-time edge, conversion
+fails rather than adding hidden time perturbations.
+
 ## Main Features
 
 Use this map after the worked example when you know the task but not the helper
@@ -241,6 +289,7 @@ name.
 | Compute compact summaries | `nnodes`, `nleaves`, `ninternal`, `branch_length`, `node_depths`, `root_to_tip_distances`, `tree_height`, `mean_root_to_tip_distance`, `ncherries` |
 | Make a quick visual check | `plot_tree` |
 | Reuse layout coordinates | `tip_positions`, `node_positions`, `parent_child_pairs`, `edge_segments` |
+| Extract sampled ancestry from EpiSim logs | `tree_from_eventlog`, `forest_from_eventlog`, `validate_tree_against_eventlog` |
 
 `TreeSim.jl` keeps these helpers close to the canonical tree representation.
 Simulation, likelihood, and rich plotting workflows belong in downstream
