@@ -5,32 +5,72 @@ using TreeSim
 
 const EventLog = EpiSim.EventLog
 
+struct ExtractionSpec
+    collapse_unsampled_unary::Bool
+end
+
+struct ValidationSpec
+    allow_unsampled_unary::Bool
+    require_immediate_transmission_child::Bool
+end
+
+const RECONSTRUCTED_TREE_SPEC = ExtractionSpec(true)
+const FULL_TREE_SPEC = ExtractionSpec(false)
+const RECONSTRUCTED_VALIDATION_SPEC = ValidationSpec(false, false)
+const FULL_VALIDATION_SPEC = ValidationSpec(true, true)
+
 function TreeSim.tree_from_eventlog(log::EventLog; validate::Bool=true)
+    return TreeSim.reconstructed_tree_from_eventlog(log; validate)
+end
+
+function TreeSim.reconstructed_tree_from_eventlog(log::EventLog; validate::Bool=true)
     forest = TreeSim.forest_from_eventlog(log; validate)
     isempty(forest) && return TreeSim.Tree()
     length(forest) == 1 ||
-        error("tree_from_eventlog found $(length(forest)) retained sampled components. It is a strict single-tree API; use forest_from_eventlog to extract the full sampled-ancestry forest.")
+        error("reconstructed_tree_from_eventlog found $(length(forest)) retained sampled components. It is a strict single-tree API; use forest_from_eventlog to extract the reconstructed forest.")
+    return only(forest)
+end
+
+function TreeSim.full_tree_from_eventlog(log::EventLog; validate::Bool=true)
+    forest = _forest_from_eventlog(log, FULL_TREE_SPEC; validate)
+    isempty(forest) && return TreeSim.Tree()
+    length(forest) == 1 ||
+        error("full_tree_from_eventlog found $(length(forest)) retained sampled components. It is a strict single-tree API.")
     return only(forest)
 end
 
 function TreeSim.forest_from_eventlog(log::EventLog; validate::Bool=true)
+    return _forest_from_eventlog(log, RECONSTRUCTED_TREE_SPEC; validate)
+end
+
+function _forest_from_eventlog(log::EventLog, spec::ExtractionSpec; validate::Bool=true)
     EpiSim.validate_event_log(log)
     _validate_bridge_log_contract(log)
-    forest = _extract_sampled_forest(log)
-    validate && _validate_forest_against_eventlog(log, forest)
+    forest = _extract_sampled_forest(log, spec)
+    validation_spec = spec.collapse_unsampled_unary ? RECONSTRUCTED_VALIDATION_SPEC : FULL_VALIDATION_SPEC
+    validate && _validate_forest_against_eventlog(log, forest, validation_spec)
     return forest
 end
 
 function TreeSim.validate_tree_against_eventlog(log::EventLog, tree::TreeSim.Tree)
     _validate_single_tree_contract(tree)
-    return _validate_forest_against_eventlog(log, isempty(tree) ? TreeSim.Tree[] : [tree])
+    return _validate_forest_against_eventlog(log, isempty(tree) ? TreeSim.Tree[] : [tree], RECONSTRUCTED_VALIDATION_SPEC)
 end
 
 function TreeSim.validate_tree_against_eventlog(log::EventLog, forest::AbstractVector{<:TreeSim.Tree})
-    return _validate_forest_against_eventlog(log, forest)
+    return _validate_forest_against_eventlog(log, forest, RECONSTRUCTED_VALIDATION_SPEC)
 end
 
-function _validate_forest_against_eventlog(log::EventLog, forest::AbstractVector{<:TreeSim.Tree})
+function TreeSim.validate_full_tree_against_eventlog(log::EventLog, tree::TreeSim.Tree)
+    _validate_single_tree_contract(tree)
+    return _validate_forest_against_eventlog(log, isempty(tree) ? TreeSim.Tree[] : [tree], FULL_VALIDATION_SPEC)
+end
+
+function TreeSim.validate_full_tree_against_eventlog(log::EventLog, forest::AbstractVector{<:TreeSim.Tree})
+    return _validate_forest_against_eventlog(log, forest, FULL_VALIDATION_SPEC)
+end
+
+function _validate_forest_against_eventlog(log::EventLog, forest::AbstractVector{<:TreeSim.Tree}, spec::ValidationSpec)
     EpiSim.validate_event_log(log)
     _validate_bridge_log_contract(log)
     for tree in forest
@@ -40,6 +80,7 @@ function _validate_forest_against_eventlog(log::EventLog, forest::AbstractVector
 
     event_counts = Dict{Tuple{EpiSim.EventKind,Int,Float64},Int}()
     transmission_counts = Dict{Tuple{Int,Int,Float64},Int}()
+    transmission_by_infector_counts = Dict{Tuple{Int,Float64},Int}()
     sampling_count = 0
 
     for i in 1:length(log)
@@ -50,6 +91,7 @@ function _validate_forest_against_eventlog(log::EventLog, forest::AbstractVector
 
         if kind == EpiSim.EK_Transmission
             _increment!(transmission_counts, (host, log.infector[i], time))
+            _increment!(transmission_by_infector_counts, (log.infector[i], time))
         elseif _is_sampling(kind)
             sampling_count += 1
         end
@@ -77,10 +119,17 @@ function _validate_forest_against_eventlog(log::EventLog, forest::AbstractVector
                 _consume!(event_counts, (EpiSim.EK_FossilizedSampling, host, time)) ||
                     error("SampledUnary does not correspond to FossilizedSampling event (host=$host, time=$time).")
             elseif kind == TreeSim.Binary
-                infectee = tree.host[tree.right[i]]
-                _consume!(transmission_counts, (infectee, host, time)) ||
-                    error("Binary node at index $i does not match Transmission event.")
+                if spec.require_immediate_transmission_child
+                    infectees = [tree.host[child] for child in TreeSim.children(tree, i)]
+                    _consume_any!(transmission_counts, ((infectee, host, time) for infectee in infectees)) ||
+                        error("Binary node at index $i does not match immediate Transmission infectee/infector event.")
+                else
+                    _consume!(transmission_by_infector_counts, (host, time)) ||
+                        error("Binary node at index $i does not match retained Transmission infector/time event.")
+                end
             elseif kind == TreeSim.UnsampledUnary
+                spec.allow_unsampled_unary ||
+                    error("UnsampledUnary node at index $i is not valid in a reconstructed tree.")
                 infectee = tree.host[tree.left[i]]
                 _consume!(transmission_counts, (infectee, host, time)) ||
                     error("UnsampledUnary node at index $i does not match Transmission event.")
@@ -150,8 +199,15 @@ function _consume!(counts::Dict{K,Int}, key::K) where {K}
     return true
 end
 
-function _extract_sampled_forest(log::EventLog)
-    tree = _extract_sampled_tree(log)
+function _consume_any!(counts::Dict{K,Int}, keys) where {K}
+    for key in keys
+        _consume!(counts, key) && return true
+    end
+    return false
+end
+
+function _extract_sampled_forest(log::EventLog, spec::ExtractionSpec)
+    tree = _extract_sampled_tree(log, spec)
     isempty(tree) && return TreeSim.Tree[]
 
     root_ids = sort(TreeSim.roots(tree); by=i -> (tree.time[i], tree.host[i], i))
@@ -164,7 +220,7 @@ function _extract_sampled_forest(log::EventLog)
     return forest
 end
 
-function _extract_sampled_tree(log::EventLog)
+function _extract_sampled_tree(log::EventLog, spec::ExtractionSpec)
     if length(log) == 0
         return TreeSim.Tree()
     end
@@ -219,7 +275,65 @@ function _extract_sampled_tree(log::EventLog)
 
     any(!iszero, active) && error("Unresolved retained sampled lineages remain after processing the EventLog. The log is missing seeding ancestry for at least one sampled component.")
     isempty(tree) && return tree
-    return _canonicalize(tree)
+    tree = _canonicalize(tree)
+    spec.collapse_unsampled_unary && (tree = _collapse_unsampled_unary(tree))
+    return tree
+end
+
+function _collapse_unsampled_unary(tree::TreeSim.Tree)
+    drop = tree.kind .== TreeSim.UnsampledUnary
+    any(drop) || return tree
+
+    old_to_new = zeros(Int, length(tree))
+    next = 0
+    for i in eachindex(tree)
+        drop[i] && continue
+        next += 1
+        old_to_new[i] = next
+    end
+
+    left = Int[]
+    right = Int[]
+    parent = Int[]
+
+    for old in eachindex(tree)
+        drop[old] && continue
+        children = [_nearest_retained_descendant(tree, child, drop) for child in TreeSim.children(tree, old)]
+        filter!(!iszero, children)
+        push!(left, isempty(children) ? 0 : old_to_new[children[1]])
+        push!(right, length(children) < 2 ? 0 : old_to_new[children[2]])
+        retained_parent = _nearest_retained_parent(tree, old, drop)
+        push!(parent, retained_parent == 0 ? 0 : old_to_new[retained_parent])
+    end
+
+    kept = findall(!, drop)
+    return TreeSim.Tree(
+        tree.time[kept],
+        left,
+        right,
+        parent,
+        tree.kind[kept],
+        tree.host[kept],
+        tree.label[kept],
+    )
+end
+
+function _nearest_retained_descendant(tree::TreeSim.Tree, node::Int, drop::AbstractVector{Bool})
+    node == 0 && return 0
+    while drop[node]
+        children = TreeSim.children(tree, node)
+        isempty(children) && return 0
+        node = only(children)
+    end
+    return node
+end
+
+function _nearest_retained_parent(tree::TreeSim.Tree, node::Int, drop::AbstractVector{Bool})
+    parent = tree.parent[node]
+    while parent != 0 && drop[parent]
+        parent = tree.parent[parent]
+    end
+    return parent
 end
 
 function _subtree_as_tree(tree::TreeSim.Tree, root_id::Int)

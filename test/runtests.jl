@@ -15,7 +15,7 @@ function canonical_binary_tree()
 end
 
 @testset "EpiSim EventLog adaptor" begin
-    @testset "serial samples on sibling transmissions produce sampled tree" begin
+    @testset "serial samples on sibling transmissions produce reconstructed tree" begin
         log = EventLog(
             [0.0, 1.0, 2.0, 3.0, 4.0],
             [1, 2, 3, 2, 3],
@@ -27,13 +27,13 @@ end
 
         @test validate_tree(tree)
         @test validate_tree_against_eventlog(log, tree)
-        @test nnodes(tree) == 5
-        @test tree.time == [0.0, 1.0, 2.0, 3.0, 4.0]
-        @test tree.kind == [Root, Binary, UnsampledUnary, SampledLeaf, SampledLeaf]
-        @test tree.host == [1, 1, 1, 2, 3]
+        @test nnodes(tree) == 4
+        @test tree.time == [0.0, 1.0, 3.0, 4.0]
+        @test tree.kind == [Root, Binary, SampledLeaf, SampledLeaf]
+        @test tree.host == [1, 1, 2, 3]
         @test children(tree, 1) == [2]
-        @test children(tree, 2) == [3, 4]
-        @test children(tree, 3) == [5]
+        @test children(tree, 2) == [4, 3]
+        @test all(!=(UnsampledUnary), tree.kind)
         @test sort(tree.label[tips(tree)]) == [2, 3]
 
         forest = forest_from_eventlog(log)
@@ -51,13 +51,17 @@ end
         )
 
         tree = tree_from_eventlog(log)
+        full = full_tree_from_eventlog(log)
 
         @test validate_tree(tree)
         @test validate_tree_against_eventlog(log, tree)
-        @test tree.kind == [Root, UnsampledUnary, SampledUnary, SampledLeaf]
-        @test tree.host == [1, 1, 2, 2]
-        @test tree.label == [0, 0, 0, 2]
-        @test ancestors(tree, 4) == [3, 2, 1]
+        @test tree.kind == [Root, SampledUnary, SampledLeaf]
+        @test tree.host == [1, 2, 2]
+        @test tree.label == [0, 0, 2]
+        @test ancestors(tree, 3) == [2, 1]
+        @test full.kind == [Root, UnsampledUnary, SampledUnary, SampledLeaf]
+        @test validate_full_tree_against_eventlog(log, full)
+        @test ancestors(full, 4) == [3, 2, 1]
     end
 
     @testset "unsampled side lineages are pruned" begin
@@ -69,12 +73,81 @@ end
         )
 
         tree = tree_from_eventlog(log)
+        full = full_tree_from_eventlog(log)
 
         @test validate_tree(tree)
         @test validate_tree_against_eventlog(log, tree)
+        @test tree.kind == [Root, SampledLeaf]
+        @test tree.host == [1, 2]
+        @test all(!=(3), tree.host)
+        @test full.kind == [Root, UnsampledUnary, SampledLeaf]
+        @test full.host == [1, 1, 2]
+        @test validate_full_tree_against_eventlog(log, full)
+    end
+
+    @testset "reconstructed tree aliases collapse unsampled unary intermediates" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0],
+            [1, 2, 2],
+            [0, 1, 0],
+            [EK_Seeding, EK_Transmission, EK_SerialSampling],
+        )
+
+        tree = reconstructed_tree_from_eventlog(log)
+
+        @test tree_from_eventlog(log).kind == tree.kind
+        @test validate_tree(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test tree.time == [0.0, 2.0]
+        @test tree.kind == [Root, SampledLeaf]
+        @test tree.host == [1, 2]
+        @test branch_length(tree, 2) == 2.0
+        @test all(!=(UnsampledUnary), tree.kind)
+    end
+
+    @testset "full tree retains sampled-ancestry transmission intermediates" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0],
+            [1, 2, 2],
+            [0, 1, 0],
+            [EK_Seeding, EK_Transmission, EK_SerialSampling],
+        )
+
+        tree = full_tree_from_eventlog(log)
+
+        @test validate_tree(tree)
+        @test validate_full_tree_against_eventlog(log, tree)
+        @test tree.time == [0.0, 1.0, 2.0]
         @test tree.kind == [Root, UnsampledUnary, SampledLeaf]
         @test tree.host == [1, 1, 2]
-        @test all(!=(3), tree.host)
+        @test children(tree, 1) == [2]
+        @test children(tree, 2) == [3]
+        @test branch_length(tree, 2) == 1.0
+        @test branch_length(tree, 3) == 1.0
+    end
+
+    @testset "reconstructed binary validation allows collapsed immediate infectee" begin
+        log = EventLog(
+            [0.0, 1.0, 2.0, 3.0, 4.0],
+            [1, 2, 1, 3, 3],
+            [0, 1, 0, 2, 0],
+            [EK_Seeding, EK_Transmission, EK_SerialSampling, EK_Transmission, EK_SerialSampling],
+        )
+
+        tree = tree_from_eventlog(log)
+        full = full_tree_from_eventlog(log)
+
+        @test validate_tree(tree)
+        @test validate_tree_against_eventlog(log, tree)
+        @test tree.kind == [Root, Binary, SampledLeaf, SampledLeaf]
+        @test tree.host == [1, 1, 1, 3]
+        @test all(!=(2), tree.host)
+        @test_throws ErrorException validate_full_tree_against_eventlog(log, tree)
+
+        @test validate_tree(full)
+        @test validate_full_tree_against_eventlog(log, full)
+        @test full.kind == [Root, Binary, SampledLeaf, UnsampledUnary, SampledLeaf]
+        @test 2 in full.host
     end
 
     @testset "logs without samples produce an empty tree" begin
@@ -86,9 +159,11 @@ end
         )
 
         tree = tree_from_eventlog(log)
+        full = full_tree_from_eventlog(log)
 
         @test isempty(tree)
         @test validate_tree_against_eventlog(log, tree)
+        @test validate_full_tree_against_eventlog(log, full)
         @test forest_from_eventlog(log) == Tree[]
     end
 
@@ -176,7 +251,7 @@ end
         @test occursin("does not correspond to Seeding event", sprint(showerror, err))
     end
 
-    @testset "equal-time retained ancestry is rejected clearly" begin
+    @testset "equal-time retained full ancestry is rejected clearly" begin
         log = EventLog(
             [0.0, 0.0, 1.0],
             [1, 2, 2],
@@ -185,7 +260,7 @@ end
         )
 
         err = try
-            tree_from_eventlog(log)
+            full_tree_from_eventlog(log)
             nothing
         catch e
             e
